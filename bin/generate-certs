@@ -1,0 +1,197 @@
+#!/usr/bin/env ruby
+require 'optparse'
+require 'fileutils'
+
+class Generator
+  ROOT_PATH  = File.expand_path('../../', __FILE__).freeze
+  CERTS_DIR = File.join(ROOT_PATH, 'assets/certs').freeze
+
+  attr_accessor :options
+  attr_reader   :ca_key_path, :ca_path
+
+  def initialize(arguments)
+    parse arguments
+  end
+
+  def process
+    exit 1 unless valid?
+
+    FileUtils.rm_rf(CERTS_DIR)
+    FileUtils.mkdir_p(CERTS_DIR)
+
+    generate_cluster_root_ca
+    generate_admin_keys
+    generate_apiserver_keys
+    generate_workers_keys unless options[:workers].empty?
+  end
+
+private
+
+  def valid?
+    errors = []
+    errors << '--master-host is required'    if options[:master_host].nil?
+    errors << '--k8s-service-ip is required' if options[:k8s_service_ip].nil?
+
+    $stderr.puts errors.join("\n") unless errors.empty?
+    errors.empty?
+  end
+
+  def generate_cluster_root_ca
+    @ca_key_path = File.join(CERTS_DIR, 'ca-key.pem')
+    @ca_path     = File.join(CERTS_DIR, 'ca.pem')
+
+    system <<-EOS
+      openssl genrsa -out #{ca_key_path} 2048
+
+      openssl req -x509 -new -nodes \
+        -key #{ca_key_path} \
+        -days 10000 \
+        -out #{ca_path} \
+        -subj "/CN=kube-ca"
+    EOS
+  end
+
+  def generate_admin_keys
+    admin_key_path  = File.join(CERTS_DIR, 'admin-key.pem')
+    admin_csr_path  = File.join(CERTS_DIR, 'admin.csr')
+
+    system <<-EOS
+      openssl genrsa -out #{admin_key_path} 2048
+
+      openssl req -new \
+        -key #{admin_key_path} \
+        -out #{admin_csr_path} \
+        -subj "/CN=kube-admin"
+
+      openssl x509 -req \
+        -in #{admin_csr_path} \
+        -CA #{ca_path} \
+        -CAkey #{ca_key_path} \
+        -CAcreateserial \
+        -out #{File.join(CERTS_DIR, 'admin.pem')} \
+        -days 365    
+    EOS
+  end
+
+  def generate_apiserver_keys
+    openssl_config_path = File.join(CERTS_DIR, 'openssl.cnf')
+
+    File.write(openssl_config_path, <<-EOS)
+[req]
+req_extensions = v3_req
+distinguished_name = req_distinguished_name
+[req_distinguished_name]
+[ v3_req ]
+basicConstraints = CA:FALSE
+keyUsage = nonRepudiation, digitalSignature, keyEncipherment
+subjectAltName = @alt_names
+[alt_names]
+DNS.1 = kubernetes
+DNS.2 = kubernetes.default
+DNS.3 = kubernetes.default.svc
+DNS.4 = kubernetes.default.svc.cluster.local
+IP.1 = #{options[:k8s_service_ip]}
+IP.2 = #{options[:master_host]}
+    EOS
+
+    api_key_path  = File.join(CERTS_DIR, 'apiserver-key.pem')
+    api_csr_path  = File.join(CERTS_DIR, 'apiserver.csr')
+
+    system <<-EOS
+      openssl genrsa -out #{api_key_path} 2048
+
+      openssl req -new \
+        -key #{api_key_path} \
+        -out #{api_csr_path} \
+        -subj "/CN=kube-apiserver" \
+        -config #{openssl_config_path}
+
+      openssl x509 -req \
+        -in #{api_csr_path} \
+        -CA #{ca_path} \
+        -CAkey #{ca_key_path} \
+        -CAcreateserial \
+        -out #{File.join(CERTS_DIR, 'apiserver.pem')} \
+        -days 365 \
+        -extensions v3_req \
+        -extfile #{openssl_config_path}
+    EOS
+  end
+
+  def generate_workers_keys
+    worker_openssl_config_path = File.join(CERTS_DIR, 'worker-openssl.cnf')
+
+    File.write(worker_openssl_config_path, <<-EOS)
+[req]
+req_extensions = v3_req
+distinguished_name = req_distinguished_name
+[req_distinguished_name]
+[ v3_req ]
+basicConstraints = CA:FALSE
+keyUsage = nonRepudiation, digitalSignature, keyEncipherment
+subjectAltName = @alt_names
+[alt_names]
+IP.1 = $ENV::WORKER_IP
+    EOS
+
+    options[:workers].each do |fqdn, ip|
+      worker_key_path = File.join(CERTS_DIR, "#{fqdn}-worker-key.pem")
+      worker_csr_path = File.join(CERTS_DIR, "#{fqdn}-worker.csr")
+
+      system <<-EOS
+        openssl genrsa -out #{worker_key_path} 2048
+
+        WORKER_IP=#{ip} openssl req -new \
+          -key #{worker_key_path} \
+          -out #{worker_csr_path} \
+          -subj "/CN=#{fqdn}" \
+          -config #{worker_openssl_config_path}
+
+        WORKER_IP=#{ip} openssl x509 -req \
+          -in #{worker_csr_path} \
+          -CA #{ca_path} \
+          -CAkey #{ca_key_path} \
+          -CAcreateserial \
+          -out #{File.join(CERTS_DIR, "#{fqdn}-worker.pem")} \
+          -days 365 \
+          -extensions v3_req \
+          -extfile #{worker_openssl_config_path}    
+      EOS
+    end
+  end
+
+  def parse(arguments)
+    self.options = {}
+
+    opt_parser = OptionParser.new do |opts|
+      opts.banner = "Usage: bin/generate-keys [options]"
+
+      opts.on(
+        '--master-host MASTER_HOST',
+        'The address of the master node'
+      ) do |master_host|
+        options[:master_host] = master_host
+      end
+
+      options[:k8s_service_ip] = '10.3.0.1'
+      opts.on(
+        '--k8s-service-ip [K8S_SERVICE_IP]',
+        "The IP address of the Kubernetes API Service (Default: #{options[:k8s_service_ip]})"
+      ) do |k8s_service_ip|
+        options[:k8s_service_ip] = k8s_service_ip
+      end
+
+      options[:workers] = {}
+      opts.on('--workers A=IP,B=IP...', Array, 'Kubernetes workers') do |o|
+        options[:workers] = Hash[o.map { |s| s.split('=', 2) }]
+      end
+
+      opts.on('-h', '--help', 'Display this screen') do
+        puts opts
+        exit
+      end
+    end.parse!(arguments)
+  end
+end
+
+Generator.new(ARGV).process
