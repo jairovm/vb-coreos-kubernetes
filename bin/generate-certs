@@ -163,8 +163,8 @@ IP.1 = $ENV::WORKER_IP
   def parse(arguments)
     self.options = {}
 
-    opt_parser = OptionParser.new do |opts|
-      opts.banner = "Usage: bin/generate-keys [options]"
+    OptionParser.new do |opts|
+      opts.banner = "Usage: bin/generate-certs [options]"
 
       opts.on(
         '--master-host MASTER_HOST',
