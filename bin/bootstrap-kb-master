@@ -1,0 +1,94 @@
+#!/usr/bin/env ruby
+require 'optparse'
+require 'fileutils'
+
+class Bootstrapper
+  ROOT_PATH  = File.expand_path('../../', __FILE__).freeze
+  CERTS_DIR  = File.join(ROOT_PATH, 'assets/certs').freeze
+  CONFIG_DIR = File.join(ROOT_PATH, 'assets/kb-master').freeze
+
+  attr_accessor :options
+  attr_reader   :ca_key_path, :ca_path
+
+  def initialize(arguments)
+    parse arguments
+  end
+
+  def process
+    exit 1 unless valid?
+
+    FileUtils.rm_rf(CONFIG_DIR)
+    FileUtils.mkdir_p(CONFIG_DIR)
+
+    copy_certs
+  end
+
+private
+
+  def copy_certs
+    home_path = %x(ssh #{options[:master_host]} pwd).strip
+
+    ssh "sudo mkdir -p /etc/kubernetes/ssl"
+
+    %w[ca.pem apiserver.crt apiserver-key.pem].each do |file|
+      scp File.join(CERTS_DIR, file), "#{home_path}/#{file}"
+      ssh "sudo mv #{home_path}/#{file} /etc/kubernetes/ssl/#{file}"
+      ssh "sudo chown root:root /etc/kubernetes/ssl/#{file}"
+    end
+
+    ssh "sudo chmod 600 /etc/kubernetes/ssl/*-key.pem"
+  end
+
+  def ssh(cmd)
+    system "ssh #{options[:master_host]} #{cmd}"
+  end
+
+  def scp(from, to)
+    system "scp #{from} #{options[:master_host]}:#{to}"
+  end
+
+  def valid?
+    errors = []
+    errors << '--master-host is required'     if options[:master_host].nil?
+    errors << '--etcd-endpoints are required' if options[:etcd_endpoints].empty?
+    #errors << '--k8s-service-ip is required' if options[:k8s_service_ip].nil?
+
+    $stderr.puts errors.join("\n") unless errors.empty?
+    errors.empty?
+  end
+
+  def parse(arguments)
+    self.options = {}
+
+    OptionParser.new do |opts|
+      opts.banner = "Usage: bin/generate-certs [options]"
+
+      opts.on(
+        '--master-host MASTER_HOST',
+        'The address of the master node'
+      ) do |master_host|
+        options[:master_host] = master_host
+      end
+
+      #options[:k8s_service_ip] = '10.3.0.1'
+      #opts.on(
+        #'--k8s-service-ip [K8S_SERVICE_IP]',
+        #"The IP address of the Kubernetes API Service (Default: #{options[:k8s_service_ip]})"
+      #) do |k8s_service_ip|
+        #options[:k8s_service_ip] = k8s_service_ip
+      #end
+
+      options[:etcd_endpoints] = []
+      opts.on('--etcd-endpoints IP,IP...', Array, 'Etcd cluster endpoints') do |ips|
+        options[:etcd_endpoints] = ips
+      end
+
+      opts.on('-h', '--help', 'Display this screen') do
+        puts opts
+        exit
+      end
+    end.parse!(arguments)
+  end
+end
+
+Bootstrapper.new(ARGV).process

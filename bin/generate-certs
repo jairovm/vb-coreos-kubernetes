@@ -3,7 +3,7 @@ require 'optparse'
 require 'fileutils'
 
 class Generator
-  ROOT_PATH  = File.expand_path('../../', __FILE__).freeze
+  ROOT_PATH = File.expand_path('../../', __FILE__).freeze
   CERTS_DIR = File.join(ROOT_PATH, 'assets/certs').freeze
 
   attr_accessor :options
