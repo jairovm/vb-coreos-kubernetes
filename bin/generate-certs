@@ -27,15 +27,6 @@ class Generator
 
 private
 
-  def valid?
-    errors = []
-    errors << '--master-host is required'    if options[:master_host].nil?
-    errors << '--k8s-service-ip is required' if options[:k8s_service_ip].nil?
-
-    $stderr.puts errors.join("\n") unless errors.empty?
-    errors.empty?
-  end
-
   def generate_cluster_root_ca
     @ca_key_path = File.join(CERTS_DIR, 'ca-key.pem')
     @ca_path     = File.join(CERTS_DIR, 'ca.pem')
@@ -68,7 +59,7 @@ private
         -CA #{ca_path} \
         -CAkey #{ca_key_path} \
         -CAcreateserial \
-        -out #{File.join(CERTS_DIR, 'admin.pem')} \
+        -out #{File.join(CERTS_DIR, 'admin.crt')} \
         -days 365    
     EOS
   end
@@ -111,7 +102,7 @@ IP.2 = #{options[:master_host]}
         -CA #{ca_path} \
         -CAkey #{ca_key_path} \
         -CAcreateserial \
-        -out #{File.join(CERTS_DIR, 'apiserver.pem')} \
+        -out #{File.join(CERTS_DIR, 'apiserver.crt')} \
         -days 365 \
         -extensions v3_req \
         -extfile #{openssl_config_path}
@@ -152,12 +143,21 @@ IP.1 = $ENV::WORKER_IP
           -CA #{ca_path} \
           -CAkey #{ca_key_path} \
           -CAcreateserial \
-          -out #{File.join(CERTS_DIR, "#{fqdn}-worker.pem")} \
+          -out #{File.join(CERTS_DIR, "#{fqdn}-worker.crt")} \
           -days 365 \
           -extensions v3_req \
           -extfile #{worker_openssl_config_path}    
       EOS
     end
+  end
+
+  def valid?
+    errors = []
+    errors << '--master-host is required'    if options[:master_host].nil?
+    errors << '--k8s-service-ip is required' if options[:k8s_service_ip].nil?
+
+    $stderr.puts errors.join("\n") unless errors.empty?
+    errors.empty?
   end
 
   def parse(arguments)
