@@ -149,7 +149,7 @@ spec:
     - --secure-port=443
     - --advertise-address=#{options[:master_host]}
     - --admission-control=NamespaceLifecycle,LimitRanger,ServiceAccount,DefaultStorageClass,ResourceQuota
-    - --tls-cert-file=/etc/kubernetes/ssl/apiserver.pem
+    - --tls-cert-file=/etc/kubernetes/ssl/apiserver.crt
     - --tls-private-key-file=/etc/kubernetes/ssl/apiserver-key.pem
     - --client-ca-file=/etc/kubernetes/ssl/ca.pem
     - --service-account-key-file=/etc/kubernetes/ssl/apiserver-key.pem
