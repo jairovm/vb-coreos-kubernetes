@@ -21,6 +21,8 @@ class Bootstrapper
     FileUtils.mkdir_p(CONFIG_DIR)
 
     copy_certs
+    configure_flannel
+    configure_docker
   end
 
 private
@@ -39,8 +41,53 @@ private
     ssh "sudo chmod 600 /etc/kubernetes/ssl/*-key.pem"
   end
 
+  def configure_flannel
+    ssh <<-EOS
+      sudo mkdir -p /etc/flannel /etc/systemd/system/flanneld.service.d
+
+      sudo echo "\
+FLANNELD_IFACE=#{options[:master_host]}
+FLANNELD_ETCD_ENDPOINTS=#{options[:etcd_endpoints].join(',')}"\
+        | sudo tee /etc/flannel/options.env > /dev/null
+
+      sudo echo "\
+[Service]
+ExecStartPre=/usr/bin/ln -sf /etc/flannel/options.env /run/flannel/options.env"\
+        | sudo tee /etc/systemd/system/flanneld.service.d/40-ExecStartPre-symlink.conf > /dev/null
+    EOS
+  end
+
+  def configure_docker
+    ssh <<-EOS.strip
+      sudo mkdir -p /etc/systemd/system/docker.service.d /etc/kubernetes/cni/net.d
+
+      sudo echo "\
+[Unit]
+Requires=flanneld.service
+After=flanneld.service
+[Service]
+EnvironmentFile=/etc/kubernetes/cni/docker_opts_cni.env"\
+      | sudo tee /etc/systemd/system/docker.service.d/40-flannel.conf > /dev/null
+
+      sudo echo "\
+DOCKER_OPT_BIP=\\"\\"
+DOCKER_OPT_IPMASQ=\\"\\""\
+      | sudo tee /etc/kubernetes/cni/docker_opts_cni.env > /dev/null
+
+      sudo echo "\
+{
+    \\"name\\": \\"podnet\\",
+    \\"type\\": \\"flannel\\",
+    \\"delegate\\": {
+        \\"isDefaultGateway\\": true
+    }
+}"\
+      | sudo tee /etc/kubernetes/cni/net.d/10-flannel.conf > /dev/null
+    EOS
+  end
+
   def ssh(cmd)
-    system "ssh #{options[:master_host]} #{cmd}"
+    system %{ssh #{options[:master_host]} '#{cmd}'}
   end
 
   def scp(from, to)

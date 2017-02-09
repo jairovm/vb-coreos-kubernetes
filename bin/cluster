@@ -24,6 +24,7 @@ private
   def start
     VMS.each do |vm|
       system "VBoxManage startvm #{vm} --type headless"
+      puts ''
       sleep 5
     end
   end
