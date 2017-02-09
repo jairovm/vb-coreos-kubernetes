@@ -95,8 +95,8 @@ DOCKER_OPT_IPMASQ=\\"\\""\
     ssh <<-EOS
       sudo echo "\
 [Service]
-Environment=KUBELET_VERSION=v1.5.2_coreos.0
-Environment="RKT_OPTS=--uuid-file-save=/var/run/kubelet-pod.uuid \
+Environment=KUBELET_IMAGE_TAG=v1.5.2_coreos.0
+Environment="RKT_RUN_ARGS=--uuid-file-save=/var/run/kubelet-pod.uuid \
   --volume var-log,kind=host,source=/var/log \
   --mount volume=var-log,target=/var/log \
   --volume dns,kind=host,source=/etc/resolv.conf \
