@@ -7,7 +7,6 @@ class Bootstrapper
   CERTS_DIR  = File.join(ROOT_PATH, 'assets/certs').freeze
 
   attr_accessor :options
-  attr_reader   :ca_key_path, :ca_path
 
   def initialize(arguments)
     parse arguments
@@ -322,7 +321,7 @@ spec:
     self.options = {}
 
     OptionParser.new do |opts|
-      opts.banner = "Usage: bin/generate-certs [options]"
+      opts.banner = "Usage: bin/bootstrap-kb-master [options]"
 
       opts.on(
         '--master-host MASTER_HOST',
