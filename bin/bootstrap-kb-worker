@@ -1,0 +1,261 @@
+#!/usr/bin/env ruby
+require 'optparse'
+require 'fileutils'
+
+class Bootstrapper
+  ROOT_PATH  = File.expand_path('../../', __FILE__).freeze
+  CERTS_DIR  = File.join(ROOT_PATH, 'assets/certs').freeze
+
+  attr_accessor :options
+  attr_reader   :ca_key_path, :ca_path
+
+  def initialize(arguments)
+    parse arguments
+  end
+
+  def process
+    exit 1 unless valid?
+
+    copy_certs
+    configure_flannel
+    configure_docker
+    configure_kubelet
+    configure_kube_proxy
+    set_up_kubeconfig
+  end
+
+private
+
+  def copy_certs
+    home_path = %x(ssh #{options[:worker_host]} pwd).strip
+
+    ssh "sudo mkdir -p /etc/kubernetes/ssl"
+
+    %W[
+      ca.pem
+      #{options[:worker_name]}-worker.crt
+      #{options[:worker_name]}-worker-key.pem
+    ].each do |file|
+      scp File.join(CERTS_DIR, file), "#{home_path}/#{file}"
+      ssh "sudo mv #{home_path}/#{file} /etc/kubernetes/ssl/#{file}"
+      ssh "sudo chown root:root /etc/kubernetes/ssl/#{file}"
+    end
+
+    ssh <<-EOS
+      sudo chmod 600 /etc/kubernetes/ssl/*-key.pem
+      cd /etc/kubernetes/ssl \
+        && sudo ln -sf #{options[:worker_name]}-worker.crt worker.crt \
+        && sudo ln -sf #{options[:worker_name]}-worker-key.pem worker-key.pem
+    EOS
+  end
+
+  def configure_flannel
+    ssh <<-EOS
+      sudo mkdir -p /etc/flannel /etc/systemd/system/flanneld.service.d
+
+      sudo echo "\
+FLANNELD_IFACE=#{options[:worker_host]}
+FLANNELD_ETCD_ENDPOINTS=#{options[:etcd_endpoints].join(',')}"\
+        | sudo tee /etc/flannel/options.env > /dev/null
+
+      sudo echo "\
+[Service]
+ExecStartPre=/usr/bin/ln -sf /etc/flannel/options.env /run/flannel/options.env"\
+        | sudo tee /etc/systemd/system/flanneld.service.d/40-ExecStartPre-symlink.conf > /dev/null
+    EOS
+  end
+
+  def configure_docker
+    ssh <<-EOS
+      sudo mkdir -p /etc/systemd/system/docker.service.d /etc/kubernetes/cni/net.d
+
+      sudo echo "\
+[Unit]
+Requires=flanneld.service
+After=flanneld.service
+[Service]
+EnvironmentFile=/etc/kubernetes/cni/docker_opts_cni.env"\
+      | sudo tee /etc/systemd/system/docker.service.d/40-flannel.conf > /dev/null
+
+      sudo echo "\
+DOCKER_OPT_BIP=\\"\\"
+DOCKER_OPT_IPMASQ=\\"\\""\
+      | sudo tee /etc/kubernetes/cni/docker_opts_cni.env > /dev/null
+
+      sudo echo "\
+{
+    \\"name\\": \\"podnet\\",
+    \\"type\\": \\"flannel\\",
+    \\"delegate\\": {
+        \\"isDefaultGateway\\": true
+    }
+}"\
+      | sudo tee /etc/kubernetes/cni/net.d/10-flannel.conf > /dev/null
+    EOS
+  end
+
+  def configure_kubelet
+    ssh <<-EOS
+      sudo echo "\
+[Service]
+Environment=KUBELET_IMAGE_TAG=v1.5.2_coreos.0
+Environment="RKT_RUN_ARGS=--uuid-file-save=/var/run/kubelet-pod.uuid \
+  --volume dns,kind=host,source=/etc/resolv.conf \
+  --mount volume=dns,target=/etc/resolv.conf \
+  --volume var-log,kind=host,source=/var/log \
+  --mount volume=var-log,target=/var/log"
+ExecStartPre=/usr/bin/mkdir -p /etc/kubernetes/manifests
+ExecStartPre=/usr/bin/mkdir -p /var/log/containers
+ExecStartPre=-/usr/bin/rkt rm --uuid-file=/var/run/kubelet-pod.uuid
+ExecStart=/usr/lib/coreos/kubelet-wrapper \
+  --api-servers=https://#{options[:master_host]} \
+  --cni-conf-dir=/etc/kubernetes/cni/net.d \
+  --container-runtime=docker \
+  --register-node=true \
+  --allow-privileged=true \
+  --pod-manifest-path=/etc/kubernetes/manifests \
+  --hostname-override=#{options[:worker_host]} \
+  --cluster_dns=10.3.0.10 \
+  --cluster_domain=cluster.local \
+  --kubeconfig=/etc/kubernetes/worker-kubeconfig.yaml \
+  --tls-cert-file=/etc/kubernetes/ssl/worker.crt \
+  --tls-private-key-file=/etc/kubernetes/ssl/worker-key.pem
+ExecStop=-/usr/bin/rkt stop --uuid-file=/var/run/kubelet-pod.uuid
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target"\
+      | sudo tee /etc/systemd/system/kubelet.service > /dev/null
+    EOS
+  end
+
+  def configure_kube_proxy
+    ssh <<-EOS
+      sudo mkdir -p /etc/kubernetes/manifests
+
+      sudo echo "\
+apiVersion: v1
+kind: Pod
+metadata:
+  name: kube-proxy
+  namespace: kube-system
+spec:
+  hostNetwork: true
+  containers:
+  - name: kube-proxy
+    image: quay.io/coreos/hyperkube:v1.5.2_coreos.0
+    command:
+    - /hyperkube
+    - proxy
+    - --master=https://#{options[:master_host]}
+    - --kubeconfig=/etc/kubernetes/worker-kubeconfig.yaml
+    securityContext:
+      privileged: true
+    volumeMounts:
+    - mountPath: /etc/ssl/certs
+      name: ssl-certs
+    - mountPath: /etc/kubernetes/worker-kubeconfig.yaml
+      name: kubeconfig
+      readOnly: true
+    - mountPath: /etc/kubernetes/ssl
+      name: etc-kube-ssl
+      readOnly: true
+  volumes:
+  - name: ssl-certs
+    hostPath:
+      path: /usr/share/ca-certificates
+  - name: kubeconfig
+    hostPath:
+      path: /etc/kubernetes/worker-kubeconfig.yaml
+  - name: etc-kube-ssl
+    hostPath:
+      path: /etc/kubernetes/ssl"\
+      | sudo tee /etc/kubernetes/manifests/kube-proxy.yaml > /dev/null
+    EOS
+  end
+
+  def set_up_kubeconfig
+    ssh <<-EOS
+      sudo echo "\
+apiVersion: v1
+kind: Config
+clusters:
+- name: local
+  cluster:
+    certificate-authority: /etc/kubernetes/ssl/ca.pem
+users:
+- name: kubelet
+  user:
+    client-certificate: /etc/kubernetes/ssl/worker.crt
+    client-key: /etc/kubernetes/ssl/worker-key.pem
+contexts:
+- context:
+    cluster: local
+    user: kubelet
+  name: kubelet-context
+current-context: kubelet-context"\
+      | sudo tee /etc/kubernetes/worker-kubeconfig.yaml > /dev/null
+    EOS
+  end
+
+  def ssh(cmd)
+    system %{ssh #{options[:worker_host]} '#{cmd}'}
+  end
+
+  def scp(from, to)
+    system "scp #{from} #{options[:worker_host]}:#{to}"
+  end
+
+  def valid?
+    errors = []
+    errors << '--master-host is required'     if options[:master_host].nil?
+    errors << '--worker-host is required'     if options[:worker_host].nil?
+    errors << '--worker-name is required'     if options[:worker_name].nil?
+    errors << '--etcd-endpoints are required' if options[:etcd_endpoints].empty?
+
+    $stderr.puts errors.join("\n") unless errors.empty?
+    errors.empty?
+  end
+
+  def parse(arguments)
+    self.options = {}
+
+    OptionParser.new do |opts|
+      opts.banner = "Usage: bin/generate-certs [options]"
+
+      opts.on(
+        '--master-host MASTER_HOST',
+        'The address of the master node'
+      ) do |master_host|
+        options[:master_host] = master_host
+      end
+
+      opts.on(
+        '--worker-host WORKER_HOST',
+        'The address of the worker node'
+      ) do |worker_host|
+        options[:worker_host] = worker_host
+      end
+
+      opts.on(
+        '--worker-name WORKER_NAME',
+        'The name of the worker node'
+      ) do |worker_name|
+        options[:worker_name] = worker_name
+      end
+
+      options[:etcd_endpoints] = []
+      opts.on('--etcd-endpoints IP,IP...', Array, 'Etcd cluster endpoints') do |ips|
+        options[:etcd_endpoints] = ips
+      end
+
+      opts.on('-h', '--help', 'Display this screen') do
+        puts opts
+        exit
+      end
+    end.parse!(arguments)
+  end
+end
+
+Bootstrapper.new(ARGV).process
