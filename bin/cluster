@@ -12,8 +12,9 @@ class Cluster
 
   def process
     case action
-    when 'start' then start
-    when 'stop'  then stop
+    when 'start'   then start
+    when 'stop'    then stop
+    when 'restart' then stop and start
     else
       parse ['-h']
     end
