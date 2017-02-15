@@ -73,13 +73,8 @@ ExecStartPre=/usr/bin/ln -sf /etc/flannel/options.env /run/flannel/options.env"\
 Requires=flanneld.service
 After=flanneld.service
 [Service]
-EnvironmentFile=/etc/kubernetes/cni/docker_opts_cni.env"\
+EnvironmentFile=/run/flannel/flannel_docker_opts.env"\
       | sudo tee /etc/systemd/system/docker.service.d/40-flannel.conf > /dev/null
-
-      sudo echo "\
-DOCKER_OPT_BIP=\\"\\"
-DOCKER_OPT_IPMASQ=\\"\\""\
-      | sudo tee /etc/kubernetes/cni/docker_opts_cni.env > /dev/null
 
       sudo echo "\
 {
