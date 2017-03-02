@@ -7,7 +7,7 @@ class Generator
   CERTS_DIR = File.join(ROOT_PATH, 'assets/certs').freeze
 
   attr_accessor :options
-  attr_reader   :ca_key_path, :ca_path
+  attr_reader   :ca_key_path, :ca_crt_path
 
   def initialize(arguments)
     parse arguments
@@ -29,7 +29,7 @@ private
 
   def generate_cluster_root_ca
     @ca_key_path = File.join(CERTS_DIR, 'ca-key.pem')
-    @ca_path     = File.join(CERTS_DIR, 'ca.pem')
+    @ca_crt_path = File.join(CERTS_DIR, 'ca-crt.pem')
 
     system <<-EOS
       openssl genrsa -out #{ca_key_path} 2048
@@ -37,7 +37,7 @@ private
       openssl req -x509 -new -nodes \
         -key #{ca_key_path} \
         -days 10000 \
-        -out #{ca_path} \
+        -out #{ca_crt_path} \
         -subj "/CN=kube-ca"
     EOS
   end
@@ -56,7 +56,7 @@ private
 
       openssl x509 -req \
         -in #{admin_csr_path} \
-        -CA #{ca_path} \
+        -CA #{ca_crt_path} \
         -CAkey #{ca_key_path} \
         -CAcreateserial \
         -out #{File.join(CERTS_DIR, 'admin.crt')} \
@@ -99,7 +99,7 @@ IP.2 = #{options[:master_host]}
 
       openssl x509 -req \
         -in #{api_csr_path} \
-        -CA #{ca_path} \
+        -CA #{ca_crt_path} \
         -CAkey #{ca_key_path} \
         -CAcreateserial \
         -out #{File.join(CERTS_DIR, 'apiserver.crt')} \
@@ -140,7 +140,7 @@ IP.1 = $ENV::WORKER_IP
 
         WORKER_IP=#{ip} openssl x509 -req \
           -in #{worker_csr_path} \
-          -CA #{ca_path} \
+          -CA #{ca_crt_path} \
           -CAkey #{ca_key_path} \
           -CAcreateserial \
           -out #{File.join(CERTS_DIR, "#{fqdn}-worker.crt")} \
