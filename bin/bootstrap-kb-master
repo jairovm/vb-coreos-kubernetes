@@ -32,7 +32,7 @@ private
 
     ssh "sudo mkdir -p /etc/kubernetes/ssl"
 
-    %w[ca.pem apiserver.crt apiserver-key.pem].each do |file|
+    %w[ca-crt.pem apiserver.crt apiserver-key.pem].each do |file|
       scp File.join(CERTS_DIR, file), "#{home_path}/#{file}"
       ssh "sudo mv #{home_path}/#{file} /etc/kubernetes/ssl/#{file}"
       ssh "sudo chown root:root /etc/kubernetes/ssl/#{file}"
@@ -141,7 +141,7 @@ spec:
     - --admission-control=NamespaceLifecycle,LimitRanger,ServiceAccount,DefaultStorageClass,ResourceQuota
     - --tls-cert-file=/etc/kubernetes/ssl/apiserver.crt
     - --tls-private-key-file=/etc/kubernetes/ssl/apiserver-key.pem
-    - --client-ca-file=/etc/kubernetes/ssl/ca.pem
+    - --client-ca-file=/etc/kubernetes/ssl/ca-crt.pem
     - --service-account-key-file=/etc/kubernetes/ssl/apiserver-key.pem
     - --runtime-config=extensions/v1beta1/networkpolicies=true
     - --anonymous-auth=false
@@ -231,7 +231,7 @@ spec:
     - --master=http://127.0.0.1:8080
     - --leader-elect=true
     - --service-account-private-key-file=/etc/kubernetes/ssl/apiserver-key.pem
-    - --root-ca-file=/etc/kubernetes/ssl/ca.pem
+    - --root-ca-file=/etc/kubernetes/ssl/ca-crt.pem
     resources:
       requests:
         cpu: 200m

@@ -31,7 +31,7 @@ private
     ssh "sudo mkdir -p /etc/kubernetes/ssl"
 
     %W[
-      ca.pem
+      ca-crt.pem
       #{options[:worker_name]}-worker.crt
       #{options[:worker_name]}-worker-key.pem
     ].each do |file|
@@ -177,7 +177,7 @@ kind: Config
 clusters:
 - name: local
   cluster:
-    certificate-authority: /etc/kubernetes/ssl/ca.pem
+    certificate-authority: /etc/kubernetes/ssl/ca-crt.pem
 users:
 - name: kubelet
   user:
