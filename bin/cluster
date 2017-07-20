@@ -31,7 +31,7 @@ private
   end
 
   def stop
-    VMS.each do |vm|
+    VMS.reverse.each do |vm|
       system "VBoxManage controlvm #{vm} acpipowerbutton"
       puts "Stopping #{vm} machine"
       sleep 3
